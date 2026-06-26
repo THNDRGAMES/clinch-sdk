@@ -73,6 +73,34 @@ This SDK handles token authentication requests, redirections, and ensures messag
 1. **Import and Initialize**: Include the SDK in your HTML file as shown in the `index.html` example.
 2. **Implement getToken**: Provide the logic to fetch the token (see our API documentation), which will be used by the SDK to authenticate with THNDR.
 
+### Cleaning up (teardown)
+
+`initGame` registers a global `message` listener. In a single-page app where the
+game can be mounted and unmounted (e.g. on route changes), you should remove that
+listener when leaving the game so listeners don't accumulate and message handlers
+don't fire multiple times.
+
+There are two equivalent ways to tear down:
+
+```js
+import { initGame, destroyGame } from '/thndr-sdk.js';
+
+// Option 1: use the `destroy` function returned by initGame
+const destroy = await initGame("games_iframe", gameUrl, getToken, /* ... */);
+// later, when the game is unmounted / the user navigates away:
+destroy();
+
+// Option 2: call destroyGame with the same iframe id
+destroyGame("games_iframe");
+```
+
+Re-initializing the same iframe id is also safe: `initGame` automatically removes
+the previous listener for that id before registering a new one, so a missed
+teardown will not leak listeners across re-inits.
+
+In frameworks, call teardown from the relevant lifecycle hook — e.g. React
+`useEffect` cleanup, Angular `ngOnDestroy`, or Vue `onUnmounted`.
+
 ## FAQ
 
 ### What do I see an error popup in my iFrame saying "There was a problem logging in. Please try again later."

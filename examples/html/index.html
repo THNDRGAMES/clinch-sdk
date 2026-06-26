@@ -14,7 +14,7 @@
         Your browser doesn't support iframes
     </iframe>
     <script type="module">
-      import { initGame, enableLogging, demoBalance  } from '/thndr-sdk.js';
+      import { initGame, destroyGame, enableLogging, demoBalance  } from '/thndr-sdk.js';
     
       // Using the "demo" operatorId will allow you to test the integration with the demo 
       // environment and now s2s required.
@@ -53,6 +53,11 @@
 
        // enableLogging(); // Optional, enable logging for debugging
 
+      // initGame resolves to a `destroy` function. Capture it and call it when
+      // the game is unmounted or the user navigates away (e.g. on a SPA route
+      // change or component teardown) so the SDK's message listener is removed
+      // and does not accumulate. Alternatively, call destroyGame("games_iframe").
+      let destroyGameListener;
       initGame(
         "games_iframe",
         "https://demo-24748543997.us-central1.run.app",
@@ -61,7 +66,16 @@
         closeIframe,
         handlePaymentError,
         analyticsEvent
-      );
+      ).then((destroy) => {
+        destroyGameListener = destroy;
+      });
+
+      // This static demo has no in-app navigation, so clean up on page unload to
+      // illustrate where a real app would tear the listener down.
+      window.addEventListener("beforeunload", () => {
+        destroyGameListener?.();
+        // Equivalent: destroyGame("games_iframe");
+      });
     </script>
   </body>
 </html>

@@ -27,9 +27,18 @@ const MessageTypes = Object.freeze({
   ANALYTICS_EVENT: "operator_analytics_event", // Analytics event from the iframe
 });
 
-var SDK_VERSION = "2.0.5";
+var SDK_VERSION = "2.0.6";
 export var demoBalance = 20000; // 200.00 USD
 export var loggingEnabled = false; // Enable logging for debugging
+
+/**
+ * Tracks the active `message` listener registered per iframe so that
+ * re-initializing the same game (e.g. on SPA navigation) does not stack up
+ * duplicate global listeners. Keyed by the iframe id passed to `initGame`.
+ *
+ * @type {Map<string, EventListener>}
+ */
+const activeListeners = new Map();
 
 /**
  * Tells the THNDR iframe that this invoice is not going to be paid and to disregard.
@@ -46,6 +55,24 @@ export function enableLogging() {
 }
 
 /**
+ * Removes the `message` listener registered by `initGame` for a given iframe.
+ * Use this to clean up when a game is unmounted or the user navigates away,
+ * preventing listener accumulation and duplicate message handling. This is an
+ * alternative to the `destroy` function returned by `initGame`.
+ *
+ * @function destroyGame
+ * @param {string} iframeId - The id of the iframe passed to `initGame`.
+ */
+export function destroyGame(iframeId) {
+  const listenerKey = iframeId || 'frame';
+  const handler = activeListeners.get(listenerKey);
+  if (handler) {
+    window.removeEventListener("message", handler);
+    activeListeners.delete(listenerKey);
+  }
+}
+
+/**
  * Initializes the THNDR SDK by listening for postMessage events from the iframe and responding accordingly.
  *
  * @async
@@ -58,6 +85,11 @@ export function enableLogging() {
  * @param {Function} handlePaymentError - Callback to handle a payment error.
  * @param {Function} [analyticsEvent] - Callback to handle analytics events.
  * @param {Function} [onPayInvoice] - Optional callback to process invoice payments.
+ * @returns {Promise<Function>} Resolves to a `destroy` function that removes the
+ *   `message` listener registered for this iframe. Call it when the game is
+ *   unmounted or the user navigates away to avoid leaking listeners. Re-calling
+ *   `initGame` for the same iframe id is also safe: the previous listener is
+ *   removed automatically before the new one is registered.
  */
 export async function initGame(
   iframeId,
@@ -71,6 +103,9 @@ export async function initGame(
 ) {
   const origin = iframeUrl;
   const elementId = iframeId ? `#${iframeId}` : 'frame';
+  // Key used to track this game's listener in `activeListeners`. Falls back to a
+  // stable value when no id is supplied so repeated init/destroy stays consistent.
+  const listenerKey = iframeId || 'frame';
 
   await waitForElm(elementId);
 
@@ -88,15 +123,16 @@ export async function initGame(
   /**
    * Event listener for incoming postMessage events from the THNDR iframe.
    * Handles messages based on their type (e.g., token requests, balance requests, etc.).
+   * Named (not anonymous) so it can be removed via `removeEventListener`.
    */
-  window.addEventListener("message", async function (event) {
+  async function messageHandler(event) {
     // Validate the origin of the message
     if (!isMessageFromTHNDR(event, origin)) {
       return;
     }
 
     logDebug(`Received message from origin ${event.origin}`);
-    
+
     // Parse the incoming message
     let messageData;
     try {
@@ -113,7 +149,15 @@ export async function initGame(
     } catch (e) {
       console.error("THNDR SDK: Error handling message", e);
     }
-  });
+  }
+
+  // Remove any listener previously registered for this iframe so re-initializing
+  // the same game does not stack up duplicate global listeners.
+  if (activeListeners.has(listenerKey)) {
+    window.removeEventListener("message", activeListeners.get(listenerKey));
+  }
+  window.addEventListener("message", messageHandler);
+  activeListeners.set(listenerKey, messageHandler);
 
   /**
    * Handles specific message types by executing the appropriate callback or action.
@@ -190,6 +234,18 @@ export async function initGame(
         logDebug(`Unknown message type received: ${message}`);
     }
   }
+
+  /**
+   * Tears down this game's `message` listener. Safe to call multiple times.
+   */
+  return function destroy() {
+    window.removeEventListener("message", messageHandler);
+    // Only clear the registry entry if it still points at this handler, so a
+    // teardown invoked after a re-init does not remove the newer listener.
+    if (activeListeners.get(listenerKey) === messageHandler) {
+      activeListeners.delete(listenerKey);
+    }
+  };
 }
 
 /**
